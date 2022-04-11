@@ -1,1 +1,219 @@
-copy here
+---
+title: "Project 1"
+author: "Julia Pratt"
+date: "`r format(Sys.Date(),'%B %d, %Y')`"
+output: 
+  html_document:
+    df_print: paged
+    code_folding: "hide"
+    toc: no
+    fig_caption: yes
+    theme: journal
+    toc_float: no 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+graphics.off()
+```
+
+```{r loadPackages, message = FALSE, include=FALSE}
+require(fpp3)
+require(tidyquant)
+require(kableExtra)
+require(tsibble)
+require(tidyverse)
+require(lubridate)
+require(timetk)
+require(reshape2)
+```
+
+## Introduction
+
+
+Although difficult to accurately capture, forecasting inflation is an essential economic practice. Shocks to the economy can cause peaks and dips in inflation, in turn impacting the economy. Inflation plays an essential role in the monetary decisions of businesses and individuals, and can also impact government policy. In order to forecast future inflation, present values and past values of inflation are required. It is also important to include certain economic indicators in order to predict persistent behaviors in the economy, as well as shocks. This 12 month forecast of inflation will utilize the traditional theory of the Philips curve model and selected economic indicators. 
+
+```{r data, include = FALSE}
+VarList <- c("PCEPI", "UNRATE", "MICH", "IPMAN", "INDPRO")
+inflate <-
+  tq_get(VarList, get="economic.data",from = "1982-01-01") %>% 
+  mutate(Month = yearmonth(date), value = price) %>% 
+  select(-c(date,price)) %>% 
+  as_tsibble(index = Month, key = symbol)
+inflatex <- inflate %>%
+  pivot_wider(names_from = symbol, values_from = value) %>%
+  as_tsibble() %>% 
+  drop_na()
+```
+
+## Variables Utilized in the Inflation Forecast
+
+
+The following outlines the variables included in the inflation forecast, sourced from St. Louis
+Fed data (FRED). Each variable is restricted to include data from the year 1982 to the most recent observation. All variables are seasonally adjusted.
+
+**PCEPI** is the Personal Consumption Expenditures: Chain-type Price Index, which measures the prices of goods and services purchased by consumers in the United States. PCEPI is the preferred measure of inflation of the Federal Reserve, as it captures consumer behavior as a result of price changes. Inflation is directly affected by consumption, as the perception of inflation by consumers causes decreases or increases in their expenditure. 
+
+**UNRATE** is the unemployment rate (ratio of unemployed workers in the labor force), sourced from the US Bureau of Labor Statistics Current Population Survey. UNRATE will be useful in our forecast due to the relationship between the unemployment rate and inflation. The concept of the Philips curve explains that unemployment and inflation are inversely related. We can assume that higher inflation is caused by economic growth, leading to an uptick in jobs and a decrease in the unemployment rate.
+
+**MICH** is the expected inflation rate released by the University of Michigan. This expectation is based on a survey of consumer beliefs on the economy and future inflation. The University of Michigan's recent release on inflation expectation outlines that consumer sentiments affect consumption, which directly impacts the inflation rate.
+
+**IPMAN** is Industrial Production: Manufacturing (NAICS) and **INDPRO** is the Industrial Production: Total Index. These indicators of production will be useful in our forecast of inflation due to the relationship between manufacturing and consumption. As stated above, consumption directly impacts the inflation rate. Basing our inflation expectations on production will allow us to account for future consumption.
+
+In addition to fitting models based on these individual variables, an "ensemble" model will also be fitted, including the average of all of the variables. This ensemble model will allow for the inclusion of each variable listed above.
+
+
+```{r mutate, include=FALSE}
+inflatex1 <- inflatex %>%
+  mutate(dif_MICH = difference(MICH))
+
+inflatex1 %>%  features(dif_MICH, unitroot_kpss)
+```
+
+```{r season}
+mutated <- inflatex1 %>% select(c("PCEPI", "UNRATE", "dif_MICH", "IPMAN", "INDPRO")) %>% 
+  mutate(inflation = 1200*log(PCEPI/lag(PCEPI))) %>%
+  mutate(dinflation = inflation - lag(inflation, 1)) %>%
+  mutate(dinflation12 = 100*log(PCEPI/lag(PCEPI,12)) - lag(inflation,12)) %>%
+  mutate(unrate = UNRATE - lag(UNRATE)) %>%
+   mutate(mich = dif_MICH - lag(dif_MICH)) %>%
+  mutate(ipman = 1200*log(IPMAN/lag(IPMAN))) %>% 
+  mutate(indpro = 100*log(INDPRO/lag(INDPRO)))%>%
+  select(-c(PCEPI, UNRATE, IPMAN, INDPRO))
+```
+
+```{r test}
+train <- mutated %>% filter_index(~ "2018-12")
+test <- mutated %>% filter_index("2019-01" ~ .)
+```
+
+
+```{r melt, warning = FALSE, include = FALSE}
+melted <- melt(mutated, "Month")
+ggplot(melted, aes(Month, value)) +
+  geom_line() +
+  facet_wrap(~variable, scales = "free", ncol = 2)
+```
+
+```{r training, warning=FALSE, include = FALSE}
+trained <- train %>%
+  model(
+    mUNRATE = TSLM(dinflation12 ~ 1 +
+            lag(dinflation,12) + lag(dinflation,13) + lag(dinflation,14) +
+            lag(dinflation,15) + lag(dinflation,16) + lag(dinflation,17) +
+            lag(dinflation,18) + lag(dinflation,19) + lag(dinflation,20) +
+            lag(dinflation,21) + lag(dinflation,22) + lag(dinflation,23) +
+            lag(unrate,12) + lag(unrate,13) + lag(unrate,14) +
+            lag(unrate,15) + lag(unrate,16) + lag(unrate,17) +
+            lag(unrate,18) + lag(unrate,19) + lag(unrate,20) +
+            lag(unrate,21) + lag(unrate,22) + lag(unrate,23)),
+    
+    mMICH = TSLM(dinflation12 ~ 1 +
+            lag(dinflation,12) + lag(dinflation,13) + lag(dinflation,14) +
+            lag(dinflation,15) + lag(dinflation,16) + lag(dinflation,17) +
+            lag(dinflation,18) + lag(dinflation,19) + lag(dinflation,20) +
+            lag(dinflation,21) + lag(dinflation,22) + lag(dinflation,23) +
+            lag(dif_MICH,12) + lag(dif_MICH,13) + lag(dif_MICH,14) +
+            lag(dif_MICH,15) + lag(dif_MICH,16) + lag(dif_MICH,17) +
+            lag(dif_MICH,18) + lag(dif_MICH,19) + lag(dif_MICH,20) +
+            lag(dif_MICH,21) + lag(dif_MICH,22) + lag(dif_MICH,23)),
+    
+    mIPMAN = TSLM(dinflation12 ~ 1 +
+            lag(dinflation,12) + lag(dinflation,13) + lag(dinflation,14) +
+            lag(dinflation,15) + lag(dinflation,16) + lag(dinflation,17) +
+            lag(dinflation,18) + lag(dinflation,19) + lag(dinflation,20) +
+            lag(dinflation,21) + lag(dinflation,22) + lag(dinflation,23) +
+            lag(ipman,12) + lag(ipman,13) + lag(ipman,14) +
+            lag(ipman,15) + lag(ipman,16) + lag(ipman,17) +
+            lag(ipman,18) + lag(ipman,19) + lag(ipman,20) +
+            lag(ipman,21) + lag(ipman,22) + lag(ipman,23)),
+    
+    mINDPRO = TSLM(dinflation12 ~ 1 +
+            lag(dinflation,12) + lag(dinflation,13) + lag(dinflation,14) +
+            lag(dinflation,15) + lag(dinflation,16) + lag(dinflation,17) +
+            lag(dinflation,18) + lag(dinflation,19) + lag(dinflation,20) +
+            lag(dinflation,21) + lag(dinflation,22) + lag(dinflation,23) +
+            lag(indpro,12) + lag(indpro,13) + lag(indpro,14) +
+            lag(indpro,15) + lag(indpro,16) + lag(indpro,17) +
+            lag(indpro,18) + lag(indpro,19) + lag(indpro,20) +
+            lag(indpro,21) + lag(indpro,22) + lag(indpro,23)),
+    
+  )
+tidy(trained)
+```
+
+
+```{r first residuals, warning = FALSE, include= FALSE}
+trained %>% select(mUNRATE) %>% gg_tsresiduals()
+```
+
+```{r forecast, include = FALSE}
+fcast <- trained %>% forecast(new = test)
+fcast %>% autoplot(filter(mutated, year(Month) > 2016), level = c(95))
+```
+
+```{r accuracy}
+ensemble <- trained %>% mutate(ensemble = (mUNRATE + mMICH + mIPMAN + mINDPRO)/4)
+
+accu <- accuracy(ensemble)
+
+forecasted <- ensemble %>% forecast(new = test)
+
+sampleaccu <- accuracy(forecasted, mutated)
+```
+
+## Evaluating Accuracy Output
+
+The two tables below include the accuracy tests of each inflation forecast by variable used, including the ensemble model. 
+
+MAPE is the mean absolute percentage error, which is the average of the absolute percentage errors for each observation in the data set. A low MAPE value indicates higher model accuracy.
+
+The first table is accuracy output given by the training model. The "training" period is a subset of data which is used to train the model to forecast inflation. In this case, the training period includes the data for years up to 2018. The second table shows the accuracy output for the "test" period, which includes a forecast for 2019 and beyond. The test period is used to gauge the accuracy of each model's forecast, and how the model would perform when actually forecasting future inflation.
+
+The first output shows that of the five models predicted, the ensemble model is the most accurate at forecasting inflation within the training period, as it has the lowest MAPE value. The MICH model has the highest MAPE value, meaning it gives the most inaccurate prediction during the training period out of the five models tested.
+
+The second output includes the forecast accuracy of the models during the test period. The ensemble model has the lowest MAPE value while UNRATE has the highest.
+
+Comparative to MAPE values for models generally accepted as accurate, the five models below have fairly high statistics for both the training and testing periods. However, the ensemble model was the most accurate forecast of inflation in both the training and testing data periods.
+
+
+```{r accuracy test, include = FALSE}
+accuracy(forecasted, mutated)
+```
+
+```{r training output}
+insample<- accu %>%
+  select(c(".model" , ".type", "MAPE")) %>%
+  kable(format = "html", table.attr = "style=width:30%$;'") %>%
+  kableExtra::kable_styling()
+
+insample
+```
+```{r tested}
+outsample <- sampleaccu %>%
+  select(c(".model" , ".type", "MAPE")) %>%
+  kable(format = "html", table.attr = "style=width:30%$;'") %>%
+  kableExtra::kable_styling()
+
+outsample
+```
+
+## Evaluating the Visual Forecast Model
+
+The plot below depicts the actual inflation rate (black line) and each of the five models' inflation predictions. The colored areas on the graph around each line mark the 95 percent confidence intervals, which show how statistically significant the models are. Although the inflation seems consistent at the beginning of the testing data, there is a spike in inflation that occurs towards the end of 2021. This shock may have been caused by COVID-19 and the monetary policy enacted by the Federal Reserve to combat pandemic effects, which lead to an increase in consumer expenditure. Each of the five models forecast varying inflation rates after this peak and the confidence intervals increase in size, suggesting somewhat inaccurate predictions. The line plotting the ensemble model, which performed the best in the above accuracy tests, does not peak as high as the actual inflation rate does after COVID-19. We can assume that forecasting inflation after COVID-19 is difficult and that the five models were unable to predict a shock of that magnitude and its after effects.
+
+```{r final forecast}
+forecasted %>% autoplot(filter(mutated, year(Month) > 2016), level = c(95))
+```
+
+
+## Conclusion
+
+After evaluating both the accuracy tests during the training and testing periods, along with the plotted predictions of each model, we can assume that the ensemble model was the most accurate in forecasting inflation. Although the visual representation of the model differs somewhat from the actual inflation rate plot, the ensemble model outpaced the other four models in our training and testing accuracy tests. With the lowest MAPE, it is safe to assume that the ensemble model is the preferred model for predicting inflation out of the five that were fitted. The above analyses also show that each model struggled to predict the shock and after effects of inflation due to the COVID-19 pandemic and ensuing monetary policy. 
+
+
+
+
+
+  
